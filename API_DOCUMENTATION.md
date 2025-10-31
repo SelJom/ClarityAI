@@ -7,6 +7,10 @@ API REST pour l'application Clarity Journal permettant la gestion des journaux p
 ```
 https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/
 ```
+## Docs URL
+```
+https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/docs
+```
 
 ## Authentification
 Non implémentée dans la version actuelle.
@@ -273,4 +277,5 @@ Liste les insights d'un journal.
   "id": 0,
   "created_at": "string"
 }
+
 ```
