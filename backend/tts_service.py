@@ -1,12 +1,16 @@
 import os
 from google.cloud import texttospeech
 
-try:
-    tts_client = texttospeech.TextToSpeechClient()
-    print("TTS Client initialized successfully.")
-except Exception as e:
-    print(f"Error initializing Google Cloud TTS client: {e}")
-    tts_client = None
+def initialize_tts_client():
+    try:
+        tts_client = texttospeech.TextToSpeechClient()
+        print("TTS Client initialized successfully.")
+        return tts_client
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to initialize Google Cloud TTS client: {e}")
+
+        return None
+tts_client = initialize_tts_client()
 
 def generate_tts_bytes(text_to_synthesize: str) -> bytes | None:
     """
