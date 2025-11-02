@@ -2,6 +2,7 @@
 
 import { GCP_AGENT_WS_URL } from '@/lib/config';
 import { useJournalStore } from '@/lib/store';
+import { useAuthStore } from '@/lib/authStore';
 
 let socket: WebSocket | null = null;
 let isConnected = false;
@@ -84,7 +85,7 @@ const sendOverSocket = (message: any) => {
 export const sendChatMessage = (text: string) => {
   // 1. Ensure we are connected (pass a real user ID)
   // The frontend needs to get this ID after login
-  const userId = '1'; // <-- TODO: Replace with real user ID from auth
+  const userId = useAuthStore.getState().userId || '1';
   if (!socket || !isConnected) {
     connectSocket(userId);
   }
