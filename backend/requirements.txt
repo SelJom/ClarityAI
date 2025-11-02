@@ -9,3 +9,5 @@ cryptography
 gunicorn
 httpx  
 numpy
+google-cloud-speech
+pyaudio
