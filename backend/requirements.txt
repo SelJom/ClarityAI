@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+google-cloud-aiplatform
+google-cloud-texttospeech
+google-cloud-secret-manager
+pydantic
+python-dotenv
+cryptography
+gunicorn
+httpx  

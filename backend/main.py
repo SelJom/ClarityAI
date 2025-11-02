@@ -1,8 +1,8 @@
 import os
 import uvicorn
 import base64
-import pymysql
 import json
+import httpx  
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, ConfigDict
 from typing import List
@@ -10,7 +10,6 @@ from datetime import datetime
 
 # GCP Imports
 from google.cloud import secretmanager
-from google.cloud.sql.connector import Connector
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
 from vertexai.language_models import TextEmbeddingModel
@@ -25,14 +24,11 @@ from tts_service import generate_tts_bytes
 # --- GCP Configuration ---
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 REGION = os.environ.get("GCP_REGION")
-DB_INSTANCE_NAME = os.environ.get("DB_INSTANCE_NAME")
-DB_NAME = ""
-DB_USER = "root"
-DB_PASS_SECRET_NAME = os.environ.get("DB_PASS_SECRET_NAME")
+AZURE_API_BASE_URL = "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api"
+api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
 
 # --- Global Clients ---
 app = FastAPI()
-db_pool = None
 gemini_flash = None
 embedding_model = None
 
@@ -42,106 +38,93 @@ class JournalEntry(BaseModel):
     id: int
     created_at: datetime
     content: str 
+    text_vector: List[float] | None = None 
 
 class JournalResponse(BaseModel):
     entries: List[JournalEntry]
 
-# --- Helper Functions ---
-def get_db_pass():
-    """Fetches the DB password from Secret Manager."""
-    client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{PROJECT_ID}/secrets/{DB_PASS_SECRET_NAME}/versions/latest"
-    response = client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
+class InsightCreate(BaseModel):
+    journal_id: int
+    journal_page_id: int | None = None
+    summary: str
+    sentiment_score: float = 0
+    emotion_tags: dict = {}
 
+# --- Helper Functions ---
 @app.on_event("startup")
-def startup_event():
-    """Initialize all GCP clients and DB pool."""
-    global db_pool, gemini_flash, embedding_model
+async def startup_event():
+    """Initialize all GCP clients."""
+    global gemini_flash, embedding_model, api_client
     
     vertexai.init(project=PROJECT_ID, location=REGION)
     gemini_flash = GenerativeModel("gemini-1.5-flash-001")
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
     
-    try:
-        connector = Connector()
-        db_pass = get_db_pass()
-        def getconn() -> pymysql.connections.Connection:
-            return connector.connect(
-                f"{PROJECT_ID}:{REGION}:{DB_INSTANCE_NAME}",
-                "pymysql", user=DB_USER, password=db_pass, db=DB_NAME,
-                cursorclass=pymysql.cursors.DictCursor # Use DictCursor!
-            )
-        db_pool = getconn()
-        print("DB pool initialized.")
-    except Exception as e:
-        print(f"CRITICAL STARTUP ERROR: {e}")
-        raise e
+    # This is our persistent client for talking to the Azure API
+    api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
+    print("GCP clients and Azure API client initialized.")
 
-def get_or_create_default_journal(user_id: str) -> int:
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up the httpx client."""
+    await api_client.aclose()
+    print("Azure API client closed.")
+
+async def get_or_create_default_journal(user_id: str) -> int:
     """
-    Finds the user's 'Default Journal' (for all chats).
+    Finds the user's 'Default Journal' by CALLING THE AZURE API.
     If it doesn't exist, this creates it.
-.
     """
-    with db_pool.cursor() as cursor:
-        # Check if the user exists 
-        cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-        user = cursor.fetchone()
-        if not user:
-            print(f"Warning: User {user_id} not found. Creating a test user.")
-            cursor.execute(
-                "INSERT INTO users (id, email, password, full_name) VALUES (%s, %s, %s, %s)",
-                (user_id, f"test_{user_id}@clarity.ai", "pass", "Test User")
-            )
-            # db_pool.commit() 
+    try:
+        # 1. Check if journal exists
+        response = await api_client.get(f"/journals?user_id={user_id}")
+        response.raise_for_status() # Raise error on 4xx/5xx
+        journals = response.json()
         
-
-        cursor.execute(
-            "SELECT id FROM journals WHERE user_id = %s AND title = 'Default Journal' LIMIT 1",
-            (user_id,)
-        )
-        journal = cursor.fetchone()
+        for journal in journals:
+            if journal['title'] == 'Default Journal':
+                return journal['id']
         
-        if journal:
-            return journal['id']
-        else:
-            print(f"Creating 'Default Journal' for user {user_id}...")
-            cursor.execute(
-                "INSERT INTO journals (user_id, title) VALUES (%s, 'Default Journal')",
-                (user_id,)
-            )
-            db_pool.commit()
-            return cursor.lastrowid
+        # 2. It doesn't exist, so create it
+        print(f"Creating 'Default Journal' for user {user_id} via API...")
+        create_payload = {"user_id": user_id, "title": "Default Journal"}
+        response = await api_client.post("/journals", json=create_payload)
+        response.raise_for_status()
+        new_journal = response.json()
+        return new_journal['id']
+        
+    except httpx.HTTPStatusError as e:
+        print(f"Error communicating with Azure API: {e}")
+        raise 
 
 # --- RAG FUNCTION ---
 async def get_relevant_entries_from_db(journal_id: int, vector: List[float]) -> List[str]:
     """
-    Performs a server-side RAG query on the journal_pages table.
+    Performs a server-side RAG query BY CALLING THE AZURE API.
+    We ask the API to do the vector search for us.
     """
-    with db_pool.cursor() as cursor:
-        vector_str = str(vector)
-        sql = """
-            SELECT content FROM journal_pages
-            WHERE journal_id = %s
-            ORDER BY COSINE_SIMILARITY(text_vector, %s) DESC
-            LIMIT 5
-        """
-        cursor.execute(sql, (journal_id, vector_str))
-        
-        plaintext_entries = [row['content'] for row in cursor.fetchall()]
-        return plaintext_entries
+ 
+    try:
+        response = await api_client.get(f"/journals/{journal_id}/pages")
+        response.raise_for_status()
+        pages = response.json()
+        recent_pages = sorted(pages, key=lambda x: x['created_at'], reverse=True)[:5]
+        return [page['content'] for page in recent_pages]
 
-# --- MAIN WEBSOCKET ENDPOINT ---
+    except httpx.HTTPStatusError as e:
+        print(f"Error fetching journal pages from Azure: {e}")
+        return []
+
+# --- WEBSOCKET ENDPOINT  ---
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     await websocket.accept()
-    # At the start of the chat, find the journal we'll be writing to.
+    
     try:
-        journal_id = get_or_create_default_journal(user_id)
+        journal_id = await get_or_create_default_journal(user_id)
         print(f"User {user_id} connected. Writing to journal_id {journal_id}.")
     except Exception as e:
-        print(f"CRITICAL DB ERROR: Could not get journal for user {user_id}. {e}")
+        print(f"CRITICAL API ERROR: Could not get journal for user {user_id}. {e}")
         await websocket.close(code=1011)
         return
 
@@ -159,15 +142,19 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 vector = embeddings[0].values
 
                 # 3. STORE (Async)
-                print("Task 2: Storing in journal_pages...")
-                with db_pool.cursor() as cursor:
-                    sql = """
-                        INSERT INTO journal_pages (journal_id, content, text_vector, entry_type) 
-                        VALUES (%s, %s, %s, 'text')
-                    """
-                    vector_str = str(vector) 
-                    cursor.execute(sql, (journal_id, raw_text, vector_str))
-                db_pool.commit()
+                print("Task 2: Storing in journal_pages via API...")
+                page_payload = {
+                    "journal_id": journal_id,
+                    "content": raw_text,
+                    "encoding": "utf-8",
+                    "entry_type": "text",
+                    "text_vector": vector 
+                }
+                try:
+                    # We don't wait for this, just fire it off
+                    await api_client.post(f"/journals/{journal_id}/pages", json=page_payload)
+                except httpx.HTTPStatusError as e:
+                    print(f"Warning: Failed to save journal page to Azure: {e}")
                 
                 # 4. ORCHESTRATOR
                 print("Task 3: Calling Orchestrator...")
@@ -185,8 +172,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     await websocket.send_json({"type": "ACK", "status": "saved_and_processed"})
                     continue 
 
-                # 6. RAG RETRIEVAL (Fast, 1-step, Server-Side)
-                print("Task 4: Running SERVER-SIDE RAG (fetch)...")
+                # 6. RAG RETRIEVAL
+                print("Task 4: Running RAG (calling Azure API)...")
                 history = "No relevant history found."
                 if route in ["Analyst", "Strategist", "Archivist", "Guide"]:
                     plaintext_context = await get_relevant_entries_from_db(journal_id, vector) 
@@ -228,7 +215,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         print(f"An error occurred in websocket: {e}")
 
 # --- SCHEDULED ANALYST ENDPOINT  ---
-SCHEDULER_TOKEN = "YOUR_OWN_SECRET_CRON_TOKEN_12345" 
+SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")
 @app.post("/run-longitudinal-analysis/{user_id}")
 async def run_longitudinal_analysis(user_id: str, request: Request):
     token = request.headers.get("X-Scheduler-Token")
@@ -236,29 +223,31 @@ async def run_longitudinal_analysis(user_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
     
     try:
-        journal_id = get_or_create_default_journal(user_id)
+        journal_id = await get_or_create_default_journal(user_id)
     except Exception as e:
         return {"status": "error", "detail": f"Could not find user/journal: {e}"}
 
     print(f"Task 1: Starting longitudinal analysis for user {user_id} (journal_id {journal_id})...")
     
-    with db_pool.cursor() as cursor:
-        sql = """
-            SELECT content FROM journal_pages
-            WHERE journal_id = %s AND created_at >= NOW() - INTERVAL 7 DAY
-            ORDER BY created_at ASC
-        """
-        cursor.execute(sql, (journal_id,))
-        entries = [row['content'] for row in cursor.fetchall()]
+    # Get the journal pages API
+    try:
+        response = await api_client.get(f"/journals/{journal_id}/pages")
+        response.raise_for_status()
+        # TODO: This needs filtering by date.
+        pages = response.json()
+        entries = [page['content'] for page in pages]
+    except httpx.HTTPStatusError as e:
+        return {"status": "error", "detail": f"Failed to fetch history: {e}"}
 
     if not entries:
         return {"status": "success", "detail": "No new entries"}
 
     full_transcript = "\n---\n".join(entries)
 
+
     print("Task 2: Calling Analyst agent...")
     analysis_request = "Please analyze my entries from the past week and provide one single, profound insight..."
-    full_prompt = full_prompt = f"""
+    full_prompt = f"""
     <system_instructions>{PROMPT_ANALYST}</system_instructions>
     <history>{full_transcript}</history>
     <new_entry>{analysis_request}</new_entry>
@@ -267,35 +256,41 @@ async def run_longitudinal_analysis(user_id: str, request: Request):
     response = await gemini_flash.generate_content_async([full_prompt])
     insight_text = response.text
 
-    print("Task 3: Saving new insight to database...")
-    with db_pool.cursor() as cursor:
-        sql = "INSERT INTO analysis_reports (user_id, insight_text) VALUES (%s, %s)"
-        cursor.execute(sql, (user_id, insight_text))
-    db_pool.commit()
+    print("Task 3: Saving new insight to database via API...")
+    insight_payload: InsightCreate = {
+        "journal_id": journal_id,
+        "summary": insight_text,
+        # We can add more data here later
+        "sentiment_score": 0, 
+        "emotion_tags": {}
+    }
+    try:
+        await api_client.post("/insights", json=insight_payload)
+    except httpx.HTTPStatusError as e:
+        return {"status": "error", "detail": f"Failed to save insight: {e}"}
     
     return {"status": "success", "insight_generated": insight_text[:50] + "..."}
 
+# --- JOURNAL BROWSER ENDPOINT ---
 @app.get("/v1/journal/{user_id}", response_model=JournalResponse)
 async def get_journal_entries(user_id: str):
     try:
-        journal_id = get_or_create_default_journal(user_id)
+        journal_id = await get_or_create_default_journal(user_id)
     except Exception:
         return JournalResponse(entries=[])
 
     print(f"Fetching journal history for user {user_id} (journal_id {journal_id})...")
     
-    with db_pool.cursor() as cursor:
-        sql = """
-            SELECT id, created_at, content 
-            FROM journal_pages
-            WHERE journal_id = %s
-            ORDER BY created_at DESC
-        """
-        cursor.execute(sql, (journal_id,))
-        results = cursor.fetchall()
-        entries = [JournalEntry(**row) for row in results]
-
-    return JournalResponse(entries=entries)
+    try:
+        response = await api_client.get(f"/journals/{journal_id}/pages")
+        response.raise_for_status()
+        pages = response.json()
+        
+        sorted_pages = sorted(pages, key=lambda x: x['created_at'], reverse=True)
+        entries = [JournalEntry(**page) for page in sorted_pages]
+        return JournalResponse(entries=entries)
+    except httpx.HTTPStatusError as e:
+        return JournalResponse(entries=[])
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
