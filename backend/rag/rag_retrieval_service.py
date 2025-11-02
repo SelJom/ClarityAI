@@ -30,6 +30,7 @@ class RAGRetrievalService:
     def __init__(
         self,
         api_base_url: str,
+        api_key: str,
         project_id: Optional[str] = None,
         location: Optional[str] = None,
         model_name: Optional[str] = None,
@@ -46,6 +47,8 @@ class RAGRetrievalService:
             max_text_length: Maximum text length for embedding generation (default: 8000 chars)
         """
         self.api_base_url = api_base_url.rstrip('/')
+        self.api_key = api_key
+        self.headers = {"X-API-Key": self.api_key}
         self.project_id = project_id or os.environ.get('GCP_PROJECT_ID', 'your-project-id')
         self.location = location or os.environ.get('GCP_LOCATION', 'us-central1')
         self.model_name = model_name or "textembedding-gecko@003"
@@ -121,7 +124,7 @@ class RAGRetrievalService:
         url = f"{self.api_base_url}/journals/{journal_id}/pages"
         
         try:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout, headers=self.headers)
             response.raise_for_status()
             
             pages = response.json()
@@ -148,7 +151,7 @@ class RAGRetrievalService:
         url = f"{self.api_base_url}/journals"
         
         try:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout, headers=self.headers)
             response.raise_for_status()
             
             journals = response.json()

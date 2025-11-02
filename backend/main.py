@@ -2,7 +2,7 @@ import os
 import uvicorn
 import base64
 import json
-import httpx  
+import httpx 
 import asyncio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, ConfigDict
@@ -10,7 +10,7 @@ from typing import List
 from datetime import datetime
 
 # GCP Imports
-from google.cloud import secretmanager
+from google.cloud import secretmanager  # <-- FIXED: Re-added this import
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
 from vertexai.language_models import TextEmbeddingModel
@@ -26,13 +26,15 @@ from rag.rag_retrieval_service import RAGRetrievalService
 # --- GCP Configuration ---
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 REGION = os.environ.get("GCP_REGION")
-AZURE_API_BASE_URL = "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api"
-api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
+AZURE_API_BASE_URL = os.environ.get("AZURE_API_BASE_URL", "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api")
+SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")  
+AZURE_KEY_SECRET_NAME = "bdd-api-key" 
 
 # --- Global Clients ---
 app = FastAPI()
 gemini_flash = None
 embedding_model = None
+api_client: httpx.AsyncClient = None 
 retrieval_service: RAGRetrievalService = None
 
 # --- Pydantic Models for Journal ---
@@ -54,25 +56,56 @@ class InsightCreate(BaseModel):
     emotion_tags: dict = {}
 
 # --- Helper Functions ---
+def get_secret(secret_name: str) -> str:
+    """Fetches a secret from Google Secret Manager."""
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{PROJECT_ID}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
+
+# --- FIXED STARTUP EVENT ---
 @app.on_event("startup")
 async def startup_event():
-    """Initialize all GCP clients."""
+    """
+    Initialize all GCP clients, the RAG service,
+    and the authenticated Azure API client.
+    """
     global gemini_flash, embedding_model, api_client, retrieval_service
     
     vertexai.init(project=PROJECT_ID, location=REGION)
-    gemini_flash = GenerativeModel("gemini-2.5-flash-001")
+    gemini_flash = GenerativeModel("gemini-2.5-flash-001") 
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
     
-    # This is our persistent client for talking to the Azure API
-    api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
-    retrieval_service = RAGRetrievalService(api_base_url=AZURE_API_BASE_URL)
+    try:
+        # 1. Get the secret key for the Azure API
+        bdd_api_key = get_secret(AZURE_KEY_SECRET_NAME)
+        
+        # 2. Create the headers our teammate requires
+        headers = {
+            "X-API-Key": bdd_api_key,
+            "Content-Type": "application/json"
+        }
+        
+        # 3. Initialize the api_client 
+        api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL, headers=headers)
+        
+        # 4. Initialize RAG service 
+        retrieval_service = RAGRetrievalService(
+            api_base_url=AZURE_API_BASE_URL,
+            api_key=bdd_api_key 
+        )
 
-    print("GCP clients and Azure API client initialized.")
+        print("GCP clients, Azure API client, and RAG Service initialized successfully.")
+        
+    except Exception as e:
+        print(f"CRITICAL STARTUP ERROR: Failed to get secrets or init clients: {e}")
+        raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up the httpx client."""
-    await api_client.aclose()
+    if api_client:
+        await api_client.aclose()
     print("Azure API client closed.")
 
 async def get_or_create_default_journal(user_id: str) -> int:
@@ -92,15 +125,23 @@ async def get_or_create_default_journal(user_id: str) -> int:
         
         # 2. It doesn't exist, so create it
         print(f"Creating 'Default Journal' for user {user_id} via API...")
-        create_payload = {"user_id": user_id, "title": "Default Journal"}
+        
+        create_payload = {"user_id": int(user_id), "title": "Default Journal"} 
+        
         response = await api_client.post("/journals", json=create_payload)
         response.raise_for_status()
         new_journal = response.json()
         return new_journal['id']
         
     except httpx.HTTPStatusError as e:
-        print(f"Error communicating with Azure API: {e}")
+        print(f"Error communicating with Azure API: {e.response.text}")
         raise 
+    except ValueError:
+        print(f"ERROR: The user_id '{user_id}' is not a valid integer. Cannot create journal.")
+        raise
+    except Exception as e:
+        print(f"An unknown error occurred in get_or_create_default_journal: {e}")
+        raise
 
 # --- RAG FUNCTION ---
 async def get_relevant_entries_from_db(journal_id: int, query_text: str) -> List[str]:
@@ -117,8 +158,6 @@ async def get_relevant_entries_from_db(journal_id: int, query_text: str) -> List
             top_k=10,        
             min_similarity=0.3 
         )
-        
-        # Extract just the 'content' for the agent's history
         return [result['content'] for result in results]
     
     except Exception as e:
@@ -146,12 +185,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 payload = data_json["payload"]
                 raw_text = payload["raw_text"]
 
-                # 2. EMBED
                 print("Task 1: Generating vector...")
                 embeddings = embedding_model.get_embeddings([raw_text])
                 vector = embeddings[0].values
 
-                # 3. STORE (Async)
                 print("Task 2: Storing in journal_pages via API...")
                 page_payload = {
                     "journal_id": journal_id,
@@ -161,12 +198,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     "text_vector": vector 
                 }
                 try:
-                    # We don't wait for this, just fire it off
-                    await api_client.post(f"/journals/{journal_id}/pages", json=page_payload)
+                    # Fire-and-forget save
+                    asyncio.create_task(
+                        api_client.post(f"/journals/{journal_id}/pages", json=page_payload)
+                    )
                 except httpx.HTTPStatusError as e:
                     print(f"Warning: Failed to save journal page to Azure: {e}")
                 
-                # 4. ORCHESTRATOR
                 print("Task 3: Calling Orchestrator...")
                 orchestrator_prompt = f"{PROMPT_ORCHESTRATOR}\n<new_entry>{raw_text}</new_entry>"
                 orchestrator_response = await gemini_flash.generate_content_async([orchestrator_prompt])
@@ -177,19 +215,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     route = "NONE"
                 print(f"Orchestrator decision: {route}")
 
-                # 5. ROUTING
                 if route == "NONE":
                     await websocket.send_json({"type": "ACK", "status": "saved_and_processed"})
                     continue 
 
-                # 6. RAG RETRIEVAL
                 print("Task 4: Running RAG (calling Azure API)...")
                 history = "No relevant history found."
                 if route in ["Analyst", "Strategist", "Archivist", "Guide"]:
-                    plaintext_context = await get_relevant_entries_from_db(journal_id, raw_text)
-                if plaintext_context:
-                    history = "\n---\n".join(plaintext_context)
-                # 7. SPECIALIST AGENT
+                    plaintext_context = await get_relevant_entries_from_db(journal_id, raw_text) 
+                    if plaintext_context:
+                        history = "\n---\n".join(plaintext_context)
+                
                 print(f"Task 5: Calling Specialist Agent: {route}")
                 specialist_prompt_template = AGENT_PROMPTS.get(route)
                 full_prompt = f"""
@@ -199,7 +235,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 Provide your agentic response:
                 """
                 
-                # 8. STREAMING RESPONSE
                 print("Task 6: Streaming response...")
                 stream = await gemini_flash.generate_content_async([full_prompt], stream=True)
                 full_text_response = ""
@@ -208,7 +243,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     full_text_response += token
                     await websocket.send_json({"type": "TOKEN", "payload": token})
                 
-                # 9. TTS 
                 print("Task 7: Generating TTS...")
                 audio_bytes = generate_tts_bytes(full_text_response)
                 
@@ -223,8 +257,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
     except Exception as e:
         print(f"An error occurred in websocket: {e}")
 
-# --- SCHEDULED ANALYST ENDPOINT  ---
-SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")
+# --- SCHEDULED ANALYST ENDPOINT ---
 @app.post("/run-longitudinal-analysis/{user_id}")
 async def run_longitudinal_analysis(user_id: str, request: Request):
     token = request.headers.get("X-Scheduler-Token")
@@ -238,11 +271,9 @@ async def run_longitudinal_analysis(user_id: str, request: Request):
 
     print(f"Task 1: Starting longitudinal analysis for user {user_id} (journal_id {journal_id})...")
     
-    # Get the journal pages API
     try:
         response = await api_client.get(f"/journals/{journal_id}/pages")
         response.raise_for_status()
-        # TODO: This needs filtering by date.
         pages = response.json()
         entries = [page['content'] for page in pages]
     except httpx.HTTPStatusError as e:
@@ -252,7 +283,6 @@ async def run_longitudinal_analysis(user_id: str, request: Request):
         return {"status": "success", "detail": "No new entries"}
 
     full_transcript = "\n---\n".join(entries)
-
 
     print("Task 2: Calling Analyst agent...")
     analysis_request = "Please analyze my entries from the past week and provide one single, profound insight..."
@@ -269,7 +299,6 @@ async def run_longitudinal_analysis(user_id: str, request: Request):
     insight_payload: InsightCreate = {
         "journal_id": journal_id,
         "summary": insight_text,
-        # We can add more data here later
         "sentiment_score": 0, 
         "emotion_tags": {}
     }
@@ -296,7 +325,7 @@ async def get_journal_entries(user_id: str):
         pages = response.json()
         
         sorted_pages = sorted(pages, key=lambda x: x['created_at'], reverse=True)
-        entries = [JournalEntry(**page) for page in sorted_pages]
+        entries = [JournalEntry(**row) for row in sorted_pages]
         return JournalResponse(entries=entries)
     except httpx.HTTPStatusError as e:
         return JournalResponse(entries=[])
