@@ -18,10 +18,8 @@ def generate_tts_bytes(text_to_synthesize: str) -> bytes | None:
         return None
 
     try:
-        # We use simple text, not SSML, to match our streaming AI
         synthesis_input = texttospeech.SynthesisInput(text=text_to_synthesize)
 
-        # We can keep your teammate's custom voice settings
         voice = texttospeech.VoiceSelectionParams(
             language_code="fr-FR",
             name="fr-FR-Neural2-C",  
