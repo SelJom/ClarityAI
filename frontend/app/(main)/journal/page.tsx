@@ -9,7 +9,7 @@ import { Button } from '../../../components/ui/Button'
 import { Link2, Mic, Sparkles, ShieldCheck, Send } from 'lucide-react'
 import { useJournalStore, type ChatMessage } from '../../../lib/store'
 import { conversations as archiveConversations } from '../../../lib/mock-data'
-
+import { sendChatMessage } from '../../../lib/api/socket'
 
 function nowTime() {
   const d = new Date()
@@ -90,25 +90,12 @@ export default function JournalPage() {
 
   function send(text: string) {
     if (!text.trim()) return
-    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', text: text.trim(), time: nowTime(), tag: 'Conversation' }
-    setChat([...(messages ?? []), userMsg])
+    
+    // Call the REAL chat function from socket.ts
+    sendChatMessage(text)
+
+    // Clear the input
     setInput('')
-    // Typing indicator then mock assistant reply
-    setTyping(true)
-    const replyText = `Thank you for sharing. What feels most important about this right now?`
-    setTimeout(() => {
-      const aiMsg: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', text: replyText, time: nowTime(), tag: 'Conversation' }
-      const next = [...(messages ?? []), userMsg, aiMsg]
-      setChat(next)
-      if (speak && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        const utt = new SpeechSynthesisUtterance(aiMsg.text)
-        utt.rate = 1
-        utt.pitch = 1
-        window.speechSynthesis.cancel()
-        window.speechSynthesis.speak(utt)
-      }
-      setTyping(false)
-    }, 700)
   }
 
   function handleSave() {

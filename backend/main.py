@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from typing import List
 from datetime import datetime
-
+from dotenv import load_dotenv
+load_dotenv()
 # GCP Imports
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
@@ -34,14 +35,19 @@ print(f"DEBUG: Project ID={PROJECT_ID}, AZURE_KEY_PRESENT={bool(AZURE_API_KEY)}"
 # --- Global Clients ---
 app = FastAPI()
 
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://127.0.0.1",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allows all domains 
-    allow_credentials=True,
-    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allows all headers
+    allow_origins=["*"],  #
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
-
 gemini_flash = None
 embedding_model = None
 speech_client = None 
@@ -78,7 +84,7 @@ async def startup_event():
     
     vertexai.init(project=PROJECT_ID, location=REGION)
     gemini_flash = GenerativeModel("gemini-2.5-flash") 
-    embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
+    embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-005")
     speech_client = speech.SpeechClient()
 
     try:

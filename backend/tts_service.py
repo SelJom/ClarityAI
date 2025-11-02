@@ -25,8 +25,8 @@ def generate_tts_bytes(text_to_synthesize: str) -> bytes | None:
         synthesis_input = texttospeech.SynthesisInput(text=text_to_synthesize)
 
         voice = texttospeech.VoiceSelectionParams(
-            language_code="fr-FR",
-            name="fr-FR-Neural2-C",  
+            language_code="en-US",
+            name="en-US-Neural2-C",  
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         

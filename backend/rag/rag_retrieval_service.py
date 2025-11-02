@@ -51,7 +51,7 @@ class RAGRetrievalService:
         self.headers = {"X-API-Key": self.api_key}
         self.project_id = project_id or os.environ.get('GCP_PROJECT_ID', 'your-project-id')
         self.location = location or os.environ.get('GCP_LOCATION', 'us-central1')
-        self.model_name = model_name or "textembedding-gecko@003"
+        self.model_name = model_name or "text-embedding-005"
         self.max_text_length = max_text_length
         
         # Initialize Vertex AI
