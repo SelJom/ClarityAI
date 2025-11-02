@@ -15,4 +15,4 @@ ENV PORT 8080
 EXPOSE 8080
 
 # Command to run your app
-CMD exec gunicorn --bind :$PORT --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 0 main:app
+CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 0 main:app
