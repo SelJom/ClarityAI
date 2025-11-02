@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./ 
 RUN npm install
 
-COPY . . 
+COPY . .
 RUN npm run build
 
 # STAGE 2: RUNNER 
@@ -16,7 +16,6 @@ WORKDIR /app
 ENV NODE_ENV production
 ENV PORT 8080
 
-# Copy necessary artifacts
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
