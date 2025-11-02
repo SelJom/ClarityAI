@@ -4,7 +4,7 @@ import base64
 import json
 import httpx 
 import asyncio
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, UploadFile, File
 from pydantic import BaseModel, ConfigDict
 from typing import List
 from datetime import datetime
@@ -13,6 +13,7 @@ from datetime import datetime
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
 from vertexai.language_models import TextEmbeddingModel
+from google.cloud import speech 
 
 from agent_hub import (
     AGENT_PROMPTS, PROMPT_ORCHESTRATOR, PROMPT_ANALYST, 
@@ -26,12 +27,13 @@ from rag.rag_retrieval_service import RAGRetrievalService
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 REGION = os.environ.get("GCP_REGION")
 AZURE_API_BASE_URL = os.environ.get("AZURE_API_BASE_URL", "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api")
-SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")  
+SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN") 
 AZURE_API_KEY = os.environ.get("BDD_API_KEY")
 # --- Global Clients ---
 app = FastAPI()
 gemini_flash = None
 embedding_model = None
+speech_client = None 
 api_client: httpx.AsyncClient = None 
 retrieval_service: RAGRetrievalService = None
 
@@ -61,12 +63,13 @@ async def startup_event():
     Initialize all GCP clients, the RAG service,
     and the authenticated Azure API client.
     """
-    global gemini_flash, embedding_model, api_client, retrieval_service
+    global gemini_flash, embedding_model, api_client, retrieval_service, speech_client
     
     vertexai.init(project=PROJECT_ID, location=REGION)
     gemini_flash = GenerativeModel("gemini-2.5-flash-001") 
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
-    
+    speech_client = speech.SpeechClient()
+
     try:
         # 1. Get the secret key
         if not AZURE_API_KEY:
@@ -99,6 +102,120 @@ async def shutdown_event():
     if api_client:
         await api_client.aclose()
     print("Azure API client closed.")
+
+@app.post("/v1/transcribe/{user_id}")
+async def transcribe_audio(user_id: str, file: UploadFile = File(...)):
+    """
+    Accepts an audio file, transcribes it, and then runs the
+    full agent loop. This is a non-streaming endpoint for voice.
+    It will return the FINAL text and audio response.
+    """
+    print(f"Received audio file from user {user_id}...")
+    
+    try:
+        journal_id = await get_or_create_default_journal(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not get journal: {e}")
+
+    # 1. Transcribe the Audio
+    try:
+        audio_content = await file.read()
+        audio = speech.RecognitionAudio(content=audio_content)
+        
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16, 
+            sample_rate_hertz=16000,
+            language_code="en-US", 
+        )
+
+        print("Task 0: Calling Speech-to-Text API...")
+        response = speech_client.recognize(config=config, audio=audio)
+        
+        if not response.results or not response.results[0].alternatives:
+            raise HTTPException(status_code=400, detail="Could not transcribe audio.")
+            
+        raw_text = response.results[0].alternatives[0].transcript
+        print(f"Transcription complete: '{raw_text}'")
+
+    except Exception as e:
+        print(f"Speech-to-Text failed: {e}")
+        raise HTTPException(status_code=500, detail="Speech-to-Text failed.")    
+    # 2. EMBED
+    print("Task 1: Generating vector...")
+    embeddings = embedding_model.get_embeddings([raw_text])
+    vector = embeddings[0].values
+
+    # 3. STORE
+    print("Task 2: Storing in journal_pages via API...")
+    page_payload = { 
+        "journal_id": journal_id, 
+        "content": raw_text, 
+        "encoding": "utf-8", 
+        "entry_type": "voice", 
+        "text_vector": vector 
+    }
+    try:
+        # We don't wait for this, just fire it off
+        asyncio.create_task(
+            api_client.post(f"/journals/{journal_id}/pages", json=page_payload)
+        )
+    except httpx.HTTPStatusError as e:
+        print(f"Warning: Failed to save journal page to Azure: {e}")
+    
+    # 4. ORCHESTRATE
+    print("Task 3: Calling Orchestrator...")
+    orchestrator_prompt = f"{PROMPT_ORCHESTRATOR}\n<new_entry>{raw_text}</new_entry>"
+    orchestrator_response = await gemini_flash.generate_content_async([orchestrator_prompt])
+    try:
+        decision = json.loads(orchestrator_response.text)
+        route = decision.get("route", "NONE")
+    except Exception:
+        route = "NONE"
+    print(f"Orchestrator decision: {route}")
+
+    # 5. ROUTE (Handle "NONE" case)
+    if route == "NONE":
+        # We still return the transcribed text so the app can show it
+        return {"type": "ACK", "status": "saved_and_processed", "text": raw_text}
+
+    # 6. RAG
+    print("Task 4: Running RAG (calling Azure API)...")
+    history = "No relevant history found."
+    if route in ["Analyst", "Strategist", "Archivist", "Guide"]:
+        plaintext_context = await get_relevant_entries_from_db(journal_id, raw_text) 
+        if plaintext_context:
+            history = "\n---\n".join(plaintext_context)
+    
+    # 7. SPECIALIST AGENT
+    print(f"Task 5: Calling Specialist Agent: {route}")
+    specialist_prompt_template = AGENT_PROMPTS.get(route)
+    full_prompt = f"""
+    <system_instructions>{specialist_prompt_template}</system_instructions>
+    <history>{history}</history>
+    <new_entry>{raw_text}</new_entry>
+    Provide your agentic response:
+    """
+    
+    # 8. GET FULL (NON-STREAMING) RESPONSE
+    print("Task 6: Getting full response...")
+    response = await gemini_flash.generate_content_async([full_prompt])
+    full_text_response = response.text
+    
+    # 9. TTS
+    print("Task 7: Generating TTS...")
+    audio_bytes = generate_tts_bytes(full_text_response)
+    audio_base64 = None
+    if audio_bytes:
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+    else:
+        print("TTS generation failed.")
+
+    # 10. RETURN EVERYTHING AT ONCE
+    return {
+        "type": "AGENT_RESPONSE",
+        "text": full_text_response,
+        "audio": audio_base64
+    }
 
 async def get_or_create_default_journal(user_id: str) -> int:
     """
@@ -147,7 +264,7 @@ async def get_relevant_entries_from_db(journal_id: int, query_text: str) -> List
             retrieval_service.search_similar_entries,
             query=query_text,
             journal_id=journal_id,
-            top_k=10,        
+            top_k=10, 		
             min_similarity=0.3 
         )
         return [result['content'] for result in results]
@@ -156,7 +273,7 @@ async def get_relevant_entries_from_db(journal_id: int, query_text: str) -> List
         print(f"RAG search failed: {e}")
         return []
 
-# --- WEBSOCKET ENDPOINT  ---
+# --- WEBSOCKET ENDPOINT 	---
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     await websocket.accept()
@@ -242,7 +359,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                     await websocket.send_json({"type": "AUDIO", "payload": audio_base64})
                 else:
-                    print("TTS generation failed, not sending audio.")
+                    print("TTS generation failed.")
 
     except WebSocketDisconnect:
         print(f"Client {user_id} disconnected.")
