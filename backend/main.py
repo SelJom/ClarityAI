@@ -10,7 +10,6 @@ from typing import List
 from datetime import datetime
 
 # GCP Imports
-from google.cloud import secretmanager  # <-- FIXED: Re-added this import
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
 from vertexai.language_models import TextEmbeddingModel
@@ -28,8 +27,7 @@ PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 REGION = os.environ.get("GCP_REGION")
 AZURE_API_BASE_URL = os.environ.get("AZURE_API_BASE_URL", "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api")
 SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")  
-AZURE_KEY_SECRET_NAME = "bdd_api_key" 
-
+AZURE_API_KEY = os.environ.get("BDD_API_KEY")
 # --- Global Clients ---
 app = FastAPI()
 gemini_flash = None
@@ -55,15 +53,8 @@ class InsightCreate(BaseModel):
     sentiment_score: float = 0
     emotion_tags: dict = {}
 
-# --- Helper Functions ---
-def get_secret(secret_name: str) -> str:
-    """Fetches a secret from Google Secret Manager."""
-    client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{PROJECT_ID}/secrets/{secret_name}/versions/latest"
-    response = client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
 
-# --- FIXED STARTUP EVENT ---
+# --- STARTUP EVENT ---
 @app.on_event("startup")
 async def startup_event():
     """
@@ -77,12 +68,13 @@ async def startup_event():
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
     
     try:
-        # 1. Get the secret key for the Azure API
-        bdd_api_key = get_secret(AZURE_KEY_SECRET_NAME)
-        
+        # 1. Get the secret key
+        if not AZURE_API_KEY:
+            raise ValueError("CRITICAL ERROR: BDD_API_KEY environment variable is not set.")
+            
         # 2. Create the headers our teammate requires
         headers = {
-            "X-API-Key": bdd_api_key,
+            "X-API-Key": AZURE_API_KEY,
             "Content-Type": "application/json"
         }
         
@@ -92,13 +84,13 @@ async def startup_event():
         # 4. Initialize RAG service 
         retrieval_service = RAGRetrievalService(
             api_base_url=AZURE_API_BASE_URL,
-            api_key=bdd_api_key 
+            api_key=AZURE_API_KEY
         )
 
         print("GCP clients, Azure API client, and RAG Service initialized successfully.")
         
     except Exception as e:
-        print(f"CRITICAL STARTUP ERROR: Failed to get secrets or init clients: {e}")
+        print(f"CRITICAL STARTUP ERROR: Failed to init clients: {e}")
         raise
 
 @app.on_event("shutdown")
