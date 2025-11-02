@@ -30,6 +30,7 @@ REGION = os.environ.get("GCP_REGION")
 AZURE_API_BASE_URL = os.environ.get("AZURE_API_BASE_URL", "https://proxy-clarity.gentleocean-eb3ee6eb.westus2.azurecontainerapps.io/api")
 SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN") 
 AZURE_API_KEY = os.environ.get("BDD_API_KEY")
+print(f"DEBUG: Project ID={PROJECT_ID}, AZURE_KEY_PRESENT={bool(AZURE_API_KEY)}")
 # --- Global Clients ---
 app = FastAPI()
 
