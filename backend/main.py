@@ -76,7 +76,7 @@ async def startup_event():
     global gemini_flash, embedding_model, api_client, retrieval_service, speech_client
     
     vertexai.init(project=PROJECT_ID, location=REGION)
-    gemini_flash = GenerativeModel("gemini-2.5-flash-001") 
+    gemini_flash = GenerativeModel("gemini-2.5-flash") 
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
     speech_client = speech.SpeechClient()
 
