@@ -97,7 +97,9 @@ async def startup_event():
         # 4. Initialize RAG service 
         retrieval_service = RAGRetrievalService(
             api_base_url=AZURE_API_BASE_URL,
-            api_key=AZURE_API_KEY
+            api_key=AZURE_API_KEY,
+            project_id=PROJECT_ID,
+            location=REGION
         )
 
         print("GCP clients, Azure API client, and RAG Service initialized successfully.")
