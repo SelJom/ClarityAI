@@ -1,204 +1,165 @@
-import { create } from 'zustand'
+import { create } from 'zustand';
+import { azureApi, gcpApi } from '@/lib/api/client';
+import { sendChatMessage } from '@/lib/api/socket';
 
+// ==========================================================
+// 1. useThemeStore (No Changes)
+// ==========================================================
 type ThemeState = {
-  theme: 'dark' | 'light'
-  setTheme: (t: 'dark' | 'light') => void
-}
+  theme: 'dark' | 'light';
+  setTheme: (t: 'dark' | 'light') => void;
+};
 
 export const useThemeStore = create<ThemeState>((set) => ({
   theme: 'dark',
   setTheme: (t) => {
     if (typeof document !== 'undefined') {
-      document.documentElement.classList.toggle('dark', t === 'dark')
+      document.documentElement.classList.toggle('dark', t === 'dark');
     }
-    set({ theme: t })
+    set({ theme: t });
   },
-}))
+}));
 
-type FocusArea = 'Reduce stress' | 'Build gratitude' | 'Improve self-confidence' | 'Better sleep' | 'Focus & clarity' | 'Emotional balance'
-
-export type MicroGoal = { id: string; text: string; area?: FocusArea; done?: boolean }
-
-type Reminder = 'off' | 'daily' | 'weekly'
+// ==========================================================
+// 2. usePlanStore (API Integrated)
+// ==========================================================
+type FocusArea = 'Reduce stress' | 'Build gratitude' | 'Improve self-confidence' | 'Better sleep' | 'Focus & clarity' | 'Emotional balance';
+export type MicroGoal = { id: string; text: string; area?: FocusArea; done?: boolean };
+type Reminder = 'off' | 'daily' | 'weekly';
 
 type PlanState = {
-  chosen: Record<string, boolean>
-  toggle: (id: string) => void
-  focus: FocusArea[]
-  setFocus: (area: FocusArea) => void
-  goals: MicroGoal[]
-  addGoal: (g: Omit<MicroGoal, 'id'>) => void
-  removeGoal: (id: string) => void
-  toggleGoal: (id: string) => void
-  clearGoals: () => void
-  reminder: Reminder
-  setReminder: (r: Reminder) => void
-}
+  chosen: Record<string, boolean>;
+  focus: FocusArea[];
+  goals: MicroGoal[];
+  reminder: Reminder;
+  updatePlan: (userId: string, patch: Partial<PlanState>) => Promise<void>;
+  fetchPlan: (userId: string) => Promise<void>;
+};
 
-const PLAN_KEY = 'clarity_plan_v1'
-
-function loadPlan(): Pick<PlanState, 'chosen' | 'focus' | 'goals' | 'reminder'> {
-  return safeLoad(PLAN_KEY, { chosen: {}, focus: [], goals: [], reminder: 'off' as Reminder })
-}
-
-function savePlan(partial: Partial<PlanState>, get: () => PlanState) {
-  const curr = get()
-  const next = { chosen: curr.chosen, focus: curr.focus, goals: curr.goals, reminder: curr.reminder, ...partial }
-  safeSave(PLAN_KEY, next as any)
-}
-
-export const usePlanStore = create<PlanState>((set, get) => ({
-  ...loadPlan(),
-  toggle: (id) => {
-    set((s) => ({ chosen: { ...s.chosen, [id]: !s.chosen[id] } }))
-    savePlan({}, get)
-  },
+export const usePlanStore = create<PlanState>((set) => ({
+  chosen: {},
   focus: [],
-  setFocus: (area) => {
-    set((s) => {
-      const exists = s.focus.includes(area)
-      let focus: FocusArea[]
-      if (exists) {
-        focus = s.focus.filter((a) => a !== area)
-      } else {
-        focus = s.focus.length >= 2 ? [s.focus[1], area].filter(Boolean) as FocusArea[] : [...s.focus, area]
-      }
-      return { focus }
-    })
-    savePlan({}, get)
-  },
   goals: [],
-  addGoal: (g) => {
-    set((s) => {
-      if (s.goals.length >= 3) return {} as any
-      const goal: MicroGoal = { id: crypto.randomUUID(), text: g.text.trim(), area: g.area, done: false }
-      const goals = [...s.goals, goal]
-      return { goals }
-    })
-    savePlan({}, get)
-  },
-  removeGoal: (id) => {
-    set((s) => ({ goals: s.goals.filter((g) => g.id !== id) }))
-    savePlan({}, get)
-  },
-  toggleGoal: (id) => {
-    set((s) => ({ goals: s.goals.map((g) => (g.id === id ? { ...g, done: !g.done } : g)) }))
-    savePlan({}, get)
-  },
-  clearGoals: () => {
-    set({ goals: [] })
-    savePlan({}, get)
-  },
   reminder: 'off',
-  setReminder: (r) => {
-    set({ reminder: r })
-    savePlan({}, get)
-  },
-}))
 
-// Journal + Mood + Chat state
+  fetchPlan: async (userId: string) => {
+    try {
+      const prefs = await azureApi.get(`/users/${userId}/preferences`); 
+      set({
+        // TODO: Frontend team maps API fields to state
+        // focus: prefs.primary_direction,
+        // goals: prefs.goals,
+      });
+    } catch (e) {
+      console.error("Failed to fetch plan:", e);
+    }
+  },
+
+  updatePlan: async (userId: string, patch: Partial<PlanState>) => {
+    set((state) => ({ ...state, ...patch }));
+    try {
+      await azureApi.put(`/users/${userId}/preferences`, patch);
+    } catch (e) {
+      console.error("Failed to save plan:", e);
+    }
+  },
+}));
+
+// ==========================================================
+// 3. useJournalStore (API Integrated)
+// ==========================================================
 export type JournalEntry = {
-  id: string
-  text: string
-  time: string // ISO string
-  tag?: 'Journal' | 'Conversation'
-}
+  id: string; 
+  content: string; 
+  created_at: string; 
+  tag?: 'Journal' | 'Conversation';
+};
 
 export type MoodEntry = {
-  id: string
-  date: string // YYYY-MM-DD
-  mood: number // 1-10
-  note?: string
-}
+  id: string;
+  date: string; // YYYY-MM-DD
+  mood: number; // 1-10
+  note?: string;
+};
 
-export type ChatMessage = { id: string; role: 'assistant' | 'user'; text: string; time: string; tag?: 'Conversation' }
+export type ChatMessage = { id: string; role: 'assistant' | 'user'; text: string; time: string; tag?: 'Conversation' };
 
 type JournalState = {
-  journal: JournalEntry[]
-  moods: MoodEntry[]
-  chat: ChatMessage[]
-  addJournal: (text: string) => void
-  removeJournal: (id: string) => void
-  addMood: (mood: number, note?: string) => void
-  setChat: (msgs: ChatMessage[]) => void
-  clearJournal: () => void
-  clearChat: () => void
-}
+  journal: JournalEntry[];
+  moods: MoodEntry[];
+  chat: ChatMessage[];
+  fetchJournal: (userId: string) => Promise<void>;
+  fetchMoods: (userId: string, journalId: number) => Promise<void>;
+  addMood: (journalId: number, mood: number, note?: string) => Promise<void>;
+  setChat: (msgs: ChatMessage[]) => void;
+  clearChat: () => void;
+};
 
-const JOURNAL_KEY = 'clarity_journal_v1'
-const MOOD_KEY = 'clarity_moods_v1'
-const CHAT_KEY = 'clarity_chat_v1'
+export const useJournalStore = create<JournalState>((set) => ({
+  journal: [],
+  moods: [],
+  chat: [],
 
-function safeLoad<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback
-  try {
-    const raw = localStorage.getItem(key)
-    if (!raw) return fallback
-    const parsed = JSON.parse(raw)
-    return parsed as T
-  } catch {
-    return fallback
-  }
-}
-
-function safeSave<T>(key: string, value: T) {
-  if (typeof window === 'undefined') return
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {}
-}
-
-export const useJournalStore = create<JournalState>((set, get) => ({
-  journal: safeLoad<JournalEntry[]>(JOURNAL_KEY, []),
-  moods: safeLoad<MoodEntry[]>(MOOD_KEY, []),
-  chat: safeLoad<ChatMessage[]>(CHAT_KEY, []),
-  addJournal: (text) => {
-    const entry: JournalEntry = { id: crypto.randomUUID(), text: text.trim(), time: new Date().toISOString(), tag: 'Journal' }
-    set((s) => {
-      const journal = [...s.journal, entry]
-      safeSave(JOURNAL_KEY, journal)
-      return { journal }
-    })
+  fetchJournal: async (userId: string) => {
+    try {
+      const response = await gcpApi.get(`/v1/journal/${userId}`);
+      set({ journal: response.entries });
+    } catch (e) {
+      console.error("Failed to fetch journal:", e);
+    }
   },
-  removeJournal: (id) => {
-    set((s) => {
-      const journal = s.journal.filter((j) => j.id !== id)
-      safeSave(JOURNAL_KEY, journal)
-      return { journal }
-    })
+
+  fetchMoods: async (userId: string, journalId: number) => {
+    try {
+      // Using the /insights endpoint as a proxy for moods
+      const response = await azureApi.get(`/journals/${journalId}/insights`);
+      
+      const moods: MoodEntry[] = response.map((insight: any) => ({
+        id: insight.id,
+        date: new Date(insight.created_at).toISOString().slice(0, 10),
+        mood: insight.sentiment_score * 10, // Convert 0.0-1.0 to 0-10
+        note: insight.summary,
+      }));
+      set({ moods });
+    } catch (e) {
+      console.error("Failed to fetch moods:", e);
+    }
   },
-  addMood: (mood, note) => {
-    const d = new Date()
-    const date = d.toISOString().slice(0, 10)
-    const entry: MoodEntry = { id: crypto.randomUUID(), date, mood, note }
-    set((s) => {
-      const existingIdx = s.moods.findIndex((m) => m.date === date)
-      let moods: MoodEntry[]
-      if (existingIdx >= 0) {
-        moods = [...s.moods]
-        moods[existingIdx] = { ...moods[existingIdx], mood, note }
-      } else {
-        moods = [...s.moods, entry]
-      }
-      safeSave(MOOD_KEY, moods)
-      return { moods }
-    })
+
+  addMood: async (journalId: number, mood: number, note?: string) => {
+    const d = new Date();
+    const date = d.toISOString().slice(0, 10);
+    const tempId = crypto.randomUUID();
+
+    set((s) => ({ 
+      moods: [...s.moods, { id: tempId, date, mood, note }] 
+    }));
+    
+    try {
+      // Saving a Mood by posting to the /insights endpoint
+      await azureApi.post(`/insights`, {
+        journal_id: journalId,
+        summary: note || '',
+        sentiment_score: mood / 10, // Convert 1-10 scale to 0.0-1.0
+        emotion_tags: {},
+      });
+    } catch (e) {
+      console.error("Failed to save mood:", e);
+    }
   },
+
   setChat: (msgs) => {
-    safeSave(CHAT_KEY, msgs)
-    set({ chat: msgs })
+    set({ chat: msgs });
   },
-  clearJournal: () => {
-    set({ journal: [] })
-    safeSave(JOURNAL_KEY, [])
-  },
+  
   clearChat: () => {
-    set({ chat: [] })
-    safeSave(CHAT_KEY, [])
+    set({ chat: [] });
   },
-}))
+}));
 
-// Onboarding / Profile state for Get Started flow
+// ==========================================================
+// 4. useOnboardingStore (API Integrated)
+// ==========================================================
 export type Identity = {
   name?: string
   nickname?: string
@@ -248,15 +209,15 @@ export type OnboardingState = {
   inner: InnerWorld
   space: SpacePrefs
   completed: boolean
+  
+  fetchOnboardingData: (userId: string) => Promise<void>;
+  updateOnboardingData: (userId: string, patch: Partial<OnboardingState>) => Promise<void>;
+  
   setStep: (n: number) => void
-  update: (patch: Partial<OnboardingState>) => void
-  complete: () => void
   reset: () => void
-}
+};
 
-const ONBOARD_KEY = 'clarity_onboarding_v1'
-
-const defaultOnboarding: OnboardingState = {
+const defaultOnboarding: Omit<OnboardingState, 'setStep' | 'updateOnboardingData' | 'fetchOnboardingData' | 'reset'> = {
   step: 0,
   identity: {},
   experience: {},
@@ -264,37 +225,43 @@ const defaultOnboarding: OnboardingState = {
   inner: {},
   space: { voiceNotes: false },
   completed: false,
-  setStep: () => {},
-  update: () => {},
-  complete: () => {},
-  reset: () => {},
-}
+};
 
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
-  ...(safeLoad<OnboardingState>(ONBOARD_KEY, defaultOnboarding)),
-  setStep: (n) => {
-    set({ step: n })
-    safeSave(ONBOARD_KEY, { ...get() })
-  },
-  update: (patch) => {
-    set((s) => ({ ...s, ...patch }))
-    safeSave(ONBOARD_KEY, { ...get(), ...patch })
-  },
-  complete: () => {
-    set({ completed: true })
-    safeSave(ONBOARD_KEY, { ...get(), completed: true })
-  },
-  reset: () => {
-    const cleared = {
-      step: 0,
-      identity: {},
-      experience: {},
-      goals: {},
-      inner: {},
-      space: { voiceNotes: false },
-      completed: false,
+  ...defaultOnboarding,
+  
+  setStep: (n) => set({ step: n }),
+  
+  reset: () => set(defaultOnboarding),
+
+  fetchOnboardingData: async (userId: string) => {
+    try {
+      const profile = await azureApi.get(`/users/${userId}/profile`);
+      const prefs = await azureApi.get(`/users/${userId}/preferences`);
+      
+      set({
+        identity: profile, 
+        experience: prefs,
+        goals: prefs,
+        inner: profile,
+        space: prefs,
+      });
+    } catch (e) {
+      console.error("Failed to fetch onboarding data:", e);
     }
-    set(cleared as Partial<OnboardingState>)
-    safeSave(ONBOARD_KEY, cleared as any)
   },
-}))
+
+  updateOnboardingData: async (userId: string, patch: Partial<OnboardingState>) => {
+    set((state) => ({ ...state, ...patch }));
+
+    try {
+      const profileData = { ...get().identity, ...get().inner };
+      await azureApi.put(`/users/${userId}/profile`, profileData);
+      
+      const prefsData = { ...get().experience, ...get().goals, ...get().space };
+      await azureApi.put(`/users/${userId}/preferences`, prefsData);
+    } catch (e) {
+      console.error("Failed to update onboarding data:", e);
+    }
+  },
+}));

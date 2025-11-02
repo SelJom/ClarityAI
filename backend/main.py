@@ -5,6 +5,7 @@ import json
 import httpx 
 import asyncio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from typing import List
 from datetime import datetime
@@ -31,6 +32,15 @@ SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN")
 AZURE_API_KEY = os.environ.get("BDD_API_KEY")
 # --- Global Clients ---
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows all domains 
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"], # Allows all headers
+)
+
 gemini_flash = None
 embedding_model = None
 speech_client = None 
