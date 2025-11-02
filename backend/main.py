@@ -3,6 +3,7 @@ import uvicorn
 import base64
 import json
 import httpx  
+import asyncio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, ConfigDict
 from typing import List
@@ -20,6 +21,7 @@ from agent_hub import (
 )
 
 from tts_service import generate_tts_bytes
+from rag.rag_retrieval_service import RAGRetrievalService
 
 # --- GCP Configuration ---
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
@@ -31,6 +33,7 @@ api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
 app = FastAPI()
 gemini_flash = None
 embedding_model = None
+retrieval_service: RAGRetrievalService = None
 
 # --- Pydantic Models for Journal ---
 class JournalEntry(BaseModel):
@@ -54,14 +57,16 @@ class InsightCreate(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize all GCP clients."""
-    global gemini_flash, embedding_model, api_client
+    global gemini_flash, embedding_model, api_client, retrieval_service
     
     vertexai.init(project=PROJECT_ID, location=REGION)
-    gemini_flash = GenerativeModel("gemini-1.5-flash-001")
+    gemini_flash = GenerativeModel("gemini-2.5-flash-001")
     embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
     
     # This is our persistent client for talking to the Azure API
     api_client = httpx.AsyncClient(base_url=AZURE_API_BASE_URL)
+    retrieval_service = RAGRetrievalService(api_base_url=AZURE_API_BASE_URL)
+
     print("GCP clients and Azure API client initialized.")
 
 @app.on_event("shutdown")
@@ -98,21 +103,26 @@ async def get_or_create_default_journal(user_id: str) -> int:
         raise 
 
 # --- RAG FUNCTION ---
-async def get_relevant_entries_from_db(journal_id: int, vector: List[float]) -> List[str]:
+async def get_relevant_entries_from_db(journal_id: int, query_text: str) -> List[str]:
     """
-    Performs a server-side RAG query BY CALLING THE AZURE API.
-    We ask the API to do the vector search for us.
+    Performs a server-side RAG query using the RAGRetrievalService.
+    Wraps the synchronous search_similar_entries in an async executor
+    to prevent blocking the server.
     """
- 
     try:
-        response = await api_client.get(f"/journals/{journal_id}/pages")
-        response.raise_for_status()
-        pages = response.json()
-        recent_pages = sorted(pages, key=lambda x: x['created_at'], reverse=True)[:5]
-        return [page['content'] for page in recent_pages]
-
-    except httpx.HTTPStatusError as e:
-        print(f"Error fetching journal pages from Azure: {e}")
+        results = await asyncio.to_thread(
+            retrieval_service.search_similar_entries,
+            query=query_text,
+            journal_id=journal_id,
+            top_k=10,        
+            min_similarity=0.3 
+        )
+        
+        # Extract just the 'content' for the agent's history
+        return [result['content'] for result in results]
+    
+    except Exception as e:
+        print(f"RAG search failed: {e}")
         return []
 
 # --- WEBSOCKET ENDPOINT  ---
@@ -176,10 +186,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 print("Task 4: Running RAG (calling Azure API)...")
                 history = "No relevant history found."
                 if route in ["Analyst", "Strategist", "Archivist", "Guide"]:
-                    plaintext_context = await get_relevant_entries_from_db(journal_id, vector) 
-                    if plaintext_context:
-                        history = "\n---\n".join(plaintext_context)
-                
+                    plaintext_context = await get_relevant_entries_from_db(journal_id, raw_text)
+                if plaintext_context:
+                    history = "\n---\n".join(plaintext_context)
                 # 7. SPECIALIST AGENT
                 print(f"Task 5: Calling Specialist Agent: {route}")
                 specialist_prompt_template = AGENT_PROMPTS.get(route)
