@@ -35,7 +35,7 @@ export default function QuickStats() {
     const now = new Date()
     const weekAgo = new Date(now)
     weekAgo.setDate(now.getDate()-6)
-    const weeklyEntries = journal.filter(j => new Date(j.time) >= weekAgo)
+    const weeklyEntries = journal.filter(j => new Date(j.created_at) >= weekAgo)
     const moodDays = new Set(
       moods
         .filter((m)=>{

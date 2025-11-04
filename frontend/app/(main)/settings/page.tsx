@@ -24,19 +24,28 @@ export default function SettingsPage() {
 
   const [e2ee, setE2ee] = useState<boolean>(true)
   const [themeMode, setThemeMode] = useState<'dark'|'light'|'auto'>(theme)
-  const [journalLayout, setJournalLayout] = useState<'minimal'|'guided'>(()=> (localStorage.getItem('pref_journal_layout') as any) || 'minimal')
-  const [fontSize, setFontSize] = useState<'sm'|'md'|'lg'>(()=> (localStorage.getItem('pref_font_size') as any) || 'md')
-  const [moodStyle, setMoodStyle] = useState<'emoji'|'slider'|'tags'>(()=> (localStorage.getItem('pref_mood_style') as any) || 'emoji')
+  const [journalLayout, setJournalLayout] = useState<'minimal'|'guided'>('minimal')
+  const [fontSize, setFontSize] = useState<'sm'|'md'|'lg'>('md')
+  const [moodStyle, setMoodStyle] = useState<'emoji'|'slider'|'tags'>('emoji')
   const [name, setName] = useState(identity.name || '')
   const [nickname, setNickname] = useState(identity.nickname || '')
   const [dob, setDob] = useState(identity.dateOfBirth || '')
   const [favAnimal, setFavAnimal] = useState(identity.favoriteAnimal || '')
   const [email] = useState('you@example.com')
+  const [notifDaily, setNotifDaily] = useState(false)
+  const [notifWeekly, setNotifWeekly] = useState(false)
+  const [notifStreak, setNotifStreak] = useState(false)
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem('settings_e2ee')
       if (raw) setE2ee(JSON.parse(raw))
+      setJournalLayout((localStorage.getItem('pref_journal_layout') as any) || 'minimal')
+      setFontSize((localStorage.getItem('pref_font_size') as any) || 'md')
+      setMoodStyle((localStorage.getItem('pref_mood_style') as any) || 'emoji')
+      setNotifDaily(JSON.parse(localStorage.getItem('notif_daily_reflection')||'false'))
+      setNotifWeekly(JSON.parse(localStorage.getItem('notif_weekly_summary')||'false'))
+      setNotifStreak(JSON.parse(localStorage.getItem('notif_streak_alerts')||'false'))
     } catch {}
   }, [])
 
@@ -149,9 +158,9 @@ export default function SettingsPage() {
       <section className="glass rounded-2xl p-5 space-y-3">
         <h2 className="text-lg font-medium">Notifications</h2>
         <div className="grid gap-2">
-          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_daily_reflection', JSON.stringify(e.target.checked)) } catch {} }} defaultChecked={JSON.parse(localStorage.getItem('notif_daily_reflection')||'false')} /> Daily reflection</label>
-          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_weekly_summary', JSON.stringify(e.target.checked)) } catch {} }} defaultChecked={JSON.parse(localStorage.getItem('notif_weekly_summary')||'false')} /> Weekly summary</label>
-          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_streak_alerts', JSON.stringify(e.target.checked)) } catch {} }} defaultChecked={JSON.parse(localStorage.getItem('notif_streak_alerts')||'false')} /> Streak alerts</label>
+          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_daily_reflection', JSON.stringify(e.target.checked)) } catch {} }} checked={notifDaily} /> Daily reflection</label>
+          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_weekly_summary', JSON.stringify(e.target.checked)) } catch {} }} checked={notifWeekly} /> Weekly summary</label>
+          <label className="flex items-center gap-3 text-sm"><input type="checkbox" onChange={(e)=>{ try { localStorage.setItem('notif_streak_alerts', JSON.stringify(e.target.checked)) } catch {} }} checked={notifStreak} /> Streak alerts</label>
         </div>
       </section>
 

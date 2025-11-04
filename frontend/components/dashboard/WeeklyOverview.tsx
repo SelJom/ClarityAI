@@ -66,9 +66,9 @@ function ChartSpark({ data, labels }: { data: number[]; labels: string[] }) {
     const x = sx(i)
     const y = sy(m)
     return d + (i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`)
-  }, ''), [data])
+  }, ''), [data, sx, sy])
 
-  const area = useMemo(() => path + ` L ${padX + (w - padX * 2)} ${h - padY} L ${padX} ${h - padY} Z`, [path])
+  const area = useMemo(() => path + ` L ${padX + (w - padX * 2)} ${h - padY} L ${padX} ${h - padY} Z`, [path, padX, w, h, padY])
 
   const svgRef = useRef<SVGSVGElement>(null)
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)

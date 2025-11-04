@@ -21,7 +21,7 @@ export default function InsightsPage() {
       d.setDate(now.getDate()-i)
       const key = d.toISOString().slice(0,10)
       const label = d.toLocaleDateString(undefined,{ day:'2-digit' })
-      const count = journal.filter(j=>j.time.slice(0,10)===key).length
+      const count = journal.filter(j=>j.created_at.slice(0,10)===key).length
       out.push({ label, count })
     }
     if (journal.length===0) {

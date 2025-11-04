@@ -34,6 +34,12 @@ type PlanState = {
   reminder: Reminder;
   updatePlan: (userId: string, patch: Partial<PlanState>) => Promise<void>;
   fetchPlan: (userId: string) => Promise<void>;
+  toggle: (id: string) => void;
+  setFocus: (focus: FocusArea) => void;
+  addGoal: (goal: { text: string; area?: FocusArea }) => void;
+  removeGoal: (id: string) => void;
+  toggleGoal: (id: string) => void;
+  setReminder: (reminder: Reminder) => void;
 };
 
 export const usePlanStore = create<PlanState>((set) => ({
@@ -63,6 +69,50 @@ export const usePlanStore = create<PlanState>((set) => ({
       console.error("Failed to save plan:", e);
     }
   },
+
+  toggle: (id: string) => {
+    set((state) => ({
+      chosen: {
+        ...state.chosen,
+        [id]: !state.chosen[id],
+      },
+    }));
+  },
+
+  setFocus: (area: FocusArea) => {
+    set((state) => ({
+      focus: state.focus.includes(area)
+        ? state.focus.filter((f) => f !== area)
+        : [...state.focus, area],
+    }));
+  },
+
+  addGoal: (goal: { text: string; area?: FocusArea }) => {
+    set((state) => ({
+      goals: [
+        ...state.goals,
+        { ...goal, id: crypto.randomUUID(), done: false },
+      ],
+    }));
+  },
+
+  removeGoal: (id: string) => {
+    set((state) => ({
+      goals: state.goals.filter((g) => g.id !== id),
+    }));
+  },
+
+  toggleGoal: (id: string) => {
+    set((state) => ({
+      goals: state.goals.map((g) =>
+        g.id === id ? { ...g, done: !g.done } : g
+      ),
+    }));
+  },
+
+  setReminder: (reminder: Reminder) => {
+    set({ reminder });
+  },
 }));
 
 // ==========================================================
@@ -90,9 +140,12 @@ type JournalState = {
   chat: ChatMessage[];
   fetchJournal: (userId: string) => Promise<void>;
   fetchMoods: (userId: string, journalId: number) => Promise<void>;
-  addMood: (journalId: number, mood: number, note?: string) => Promise<void>;
+  addMood: (mood: number, note?: string) => Promise<void>;
   setChat: (msgs: ChatMessage[]) => void;
   clearChat: () => void;
+  addJournal: (content: string) => void;
+  removeJournal: (id: string) => void;
+  clearJournal: () => void;
 };
 
 export const useJournalStore = create<JournalState>((set) => ({
@@ -126,7 +179,7 @@ export const useJournalStore = create<JournalState>((set) => ({
     }
   },
 
-  addMood: async (journalId: number, mood: number, note?: string) => {
+  addMood: async (mood: number, note?: string) => {
     const d = new Date();
     const date = d.toISOString().slice(0, 10);
     const tempId = crypto.randomUUID();
@@ -135,17 +188,18 @@ export const useJournalStore = create<JournalState>((set) => ({
       moods: [...s.moods, { id: tempId, date, mood, note }] 
     }));
     
-    try {
-      // Saving a Mood by posting to the /insights endpoint
-      await azureApi.post(`/insights`, {
-        journal_id: journalId,
-        summary: note || '',
-        sentiment_score: mood / 10, // Convert 1-10 scale to 0.0-1.0
-        emotion_tags: {},
-      });
-    } catch (e) {
-      console.error("Failed to save mood:", e);
-    }
+    // TODO: Figure out how to get journalId here
+    // try {
+    //   // Saving a Mood by posting to the /insights endpoint
+    //   await azureApi.post(`/insights`, {
+    //     journal_id: journalId,
+    //     summary: note || '',
+    //     sentiment_score: mood / 10, // Convert 1-10 scale to 0.0-1.0
+    //     emotion_tags: {},
+    //   });
+    // } catch (e) {
+    //   console.error("Failed to save mood:", e);
+    // }
   },
 
   setChat: (msgs) => {
@@ -154,6 +208,28 @@ export const useJournalStore = create<JournalState>((set) => ({
   
   clearChat: () => {
     set({ chat: [] });
+  },
+
+  addJournal: (content: string) => {
+    const newEntry: JournalEntry = {
+      id: crypto.randomUUID(),
+      content,
+      created_at: new Date().toISOString(),
+      tag: 'Journal',
+    };
+    set((state) => ({ journal: [...state.journal, newEntry] }));
+    // TODO: Also call an API to persist this
+  },
+
+  removeJournal: (id: string) => {
+    set((state) => ({
+      journal: state.journal.filter((j) => j.id !== id),
+    }));
+    // TODO: Also call an API to persist this
+  },
+
+  clearJournal: () => {
+    set({ journal: [], moods: [] });
   },
 }));
 
@@ -211,13 +287,13 @@ export type OnboardingState = {
   completed: boolean
   
   fetchOnboardingData: (userId: string) => Promise<void>;
-  updateOnboardingData: (userId: string, patch: Partial<OnboardingState>) => Promise<void>;
-  
+  update: (patch: Partial<OnboardingState>) => Promise<void>;
+  complete: () => void;
   setStep: (n: number) => void
   reset: () => void
 };
 
-const defaultOnboarding: Omit<OnboardingState, 'setStep' | 'updateOnboardingData' | 'fetchOnboardingData' | 'reset'> = {
+const defaultOnboarding: Omit<OnboardingState, 'setStep' | 'update' | 'fetchOnboardingData' | 'reset' | 'complete'> = {
   step: 0,
   identity: {},
   experience: {},
@@ -251,8 +327,11 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     }
   },
 
-  updateOnboardingData: async (userId: string, patch: Partial<OnboardingState>) => {
+  update: async (patch: Partial<OnboardingState>) => {
     set((state) => ({ ...state, ...patch }));
+
+    // Assume a single user for now
+    const userId = 'user123';
 
     try {
       const profileData = { ...get().identity, ...get().inner };
@@ -264,4 +343,6 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       console.error("Failed to update onboarding data:", e);
     }
   },
+
+  complete: () => set({ completed: true }),
 }));

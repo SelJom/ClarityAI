@@ -1,77 +1,65 @@
+/*
+  NOTE: This is a great place to drop any global CSS you want to apply.
+  Use this for things like base typography, global layout rules, or utility classes.
+  If you're using a component library, you might also import its base styles here.
+*/
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg-deep: #0D0F22;
-  --acc-blue: #8FC8FF;
-  --acc-violet: #C58AFF;
-  --acc-rose: #F9A9D3;
+  --background-start-rgb: 0, 0, 0;
+  --background-end-rgb: 10, 8, 12;
+  --foreground-rgb: 255, 255, 255;
+
+  --text-primary: 234, 234, 234;
+  --text-secondary: 180, 180, 180;
+
+  --acc-blue: 143, 200, 255;
+  --acc-violet: 197, 138, 255;
+  --acc-rose: 245, 158, 11;
 }
 
-html, body, #__next {
-  height: 100%;
+.dark {
+  /* TBD */
 }
 
 body {
-  background: var(--bg-deep);
-  color: #F3F4FA;
+  color: rgb(var(--text-primary));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
 }
 
-/* Theme modes */
-.theme-dark body {
-  background: var(--bg-deep);
-  color: #F3F4FA;
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
 }
 
-.theme-light body {
-  background: #FFFFFF !important;
-  color: #0F172A; /* slate-900-ish for readability */
+/* Additive styles specific to this project */
+.text-gradient {
+  @apply bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent;
 }
 
-/* Glass + edge tuning per theme for parity */
-.theme-dark .glass {
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+.ring-gradient {
+  --tw-ring-color: linear-gradient(to right, theme('colors.blue.400'), theme('colors.purple.400')) !important;
 }
 
-.theme-light .glass {
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(15, 23, 42, 0.08); /* slate-900/8 */
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
 }
 
-.theme-dark .neon-edge {
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.12), 0 8px 30px rgba(143,200,255,0.22);
+/* From-scratch custom components */
+.radar-chart {
+  /* Define chart styles here */
 }
-
-.theme-light .neon-edge {
-  /* Outline + dual-color soft glow to mirror dark theme character */
-  box-shadow:
-    0 0 0 1px rgba(15,23,42,0.10),
-    0 10px 24px rgba(197, 138, 255, 0.18), /* violet */
-    0 16px 36px rgba(143, 200, 255, 0.16); /* blue */
-}
-
-/* Text color token overrides for light theme */
-.theme-light .text-text-primary { color: #0F172A !important; }
-.theme-light .text-text-secondary { color: #475569 !important; } /* slate-600 */
-
-/* Utility shade overrides for dividers and subtle backgrounds in light mode */
-.theme-light .divide-white\/5 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(15,23,42,0.08) !important; }
-.theme-light .border-white\/10 { border-color: rgba(15,23,42,0.12) !important; }
-.theme-light .bg-white\/10 { background-color: rgba(15,23,42,0.06) !important; }
 
 /* Glass helpers */
 .glass-surface {
-  @apply glass rounded-xl border border-white/10 shadow-neon;
-}
-
-/* Focus ring */
-.focus-ring {
-  @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FC8FF] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent;
+  @apply glass rounded-xl border border-white/10 neon-edge;
 }

@@ -7,7 +7,7 @@ import { useDashboardFilters } from '../../lib/dashboard/filters'
 
 const RadarChartCmp = dynamic(async () => {
   const m = await import('recharts')
-  return ({ data }: { data: Array<{ metric: string; value: number }> }) => (
+  const RadarChart = ({ data }: { data: Array<{ metric: string; value: number }> }) => (
     <m.ResponsiveContainer width="100%" height={260}>
       <m.RadarChart data={data} outerRadius={80}>
         <m.PolarGrid stroke="rgba(255,255,255,0.12)" />
@@ -17,13 +17,14 @@ const RadarChartCmp = dynamic(async () => {
       </m.RadarChart>
     </m.ResponsiveContainer>
   )
+  RadarChart.displayName = 'RadarChart'
+  return RadarChart
 }, { ssr: false })
 
 export default function RadarProfile() {
   const identity = useOnboardingStore((s) => s.identity)
   const focus = usePlanStore((s) => s.focus)
   const moods = useJournalStore((s) => s.moods)
-  const range = useDashboardFilters((s)=>s.dateRange)
   const tags = useDashboardFilters((s)=>s.tags)
 
   const data = useMemo(() => {
@@ -40,7 +41,7 @@ export default function RadarProfile() {
       { metric: 'Resilience', value: resilience },
       { metric: 'Connection', value: connection },
     ]
-  }, [identity, focus, moods, range, tags])
+  }, [identity, focus, moods, tags])
 
   return (
     <div className="glass-surface p-4 rounded-2xl">

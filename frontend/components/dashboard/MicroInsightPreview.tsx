@@ -14,7 +14,7 @@ export default function MicroInsightPreview() {
     if (avgMood >= 7) return 'This week carried a steady, positive tone. Keep leaning into what restores you.'
     if (avgMood >= 4) return 'A mixed week with steadying moments — your check-ins are building awareness.'
     return 'It looks like a heavier week. Gentle steps and small wins can help lighten the load.'
-  }, [journal, moods])
+  }, [moods])
 
   return (
     <div className="glass-surface p-6 rounded-2xl bg-gradient-to-tr from-[#34D39914] via-transparent to-[#8FC8FF14]">

@@ -40,7 +40,7 @@ export default function ProfilePage() {
   const focus = usePlanStore((s) => s.focus)
 
   const initials = useMemo(() => name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase(), [name])
-  const entryTimes = useMemo(() => journal.map((j) => j.time), [journal])
+  const entryTimes = useMemo(() => journal.map((j) => j.created_at), [journal])
   const memberSince = useMemo(() => formatMemberSince(entryTimes), [entryTimes])
   const streak = useMemo(() => calcStreak(entryTimes), [entryTimes])
 
